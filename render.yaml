@@ -1,0 +1,15 @@
+# Render Blueprint: RAG Chatbot (Streamlit)
+# Deploy: connect this repo at dashboard.render.com and use this file, or create a Web Service manually.
+
+services:
+  - type: web
+    name: rag-chatbot
+    runtime: docker
+
+    # Dockerfile in repo root is used automatically.
+
+    envVars:
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_MODEL
+        value: openai/gpt-4o-mini
