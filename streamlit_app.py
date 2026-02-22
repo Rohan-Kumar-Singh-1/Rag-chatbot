@@ -99,8 +99,8 @@ def get_llm(model_name: str, api_key: str):
     """Create a ChatOpenAI client pointed at OpenRouter."""
     return ChatOpenAI(
         model=model_name,
-        openai_api_key=api_key,
-        openai_api_base=OPENROUTER_BASE_URL,
+        api_key=api_key,
+        base_url="https://openrouter.ai/api/v1",
         temperature=0.1,
         default_headers={
             "HTTP-Referer": "https://github.com/your-app",
