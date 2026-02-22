@@ -1,0 +1,24 @@
+# RAG Chatbot Dependencies  (OpenRouter edition)
+# Install with: pip install -r requirements.txt
+
+# ── Core LangChain ────────────────────────────────────────────────────────────
+langchain>=0.2.0
+langchain-core>=0.2.0
+langchain-community>=0.2.0
+langchain-openai>=0.1.0      # OpenRouter uses the OpenAI-compatible API
+
+# ── Embeddings (local, no API key needed) ────────────────────────────────────
+sentence-transformers>=2.7.0
+faiss-cpu>=1.8.0
+
+# ── Document loaders ─────────────────────────────────────────────────────────
+pypdf>=4.0.0          # PDF support
+beautifulsoup4>=4.12  # Web / HTML loading
+lxml>=5.0.0
+
+# ── Environment / config ─────────────────────────────────────────────────────
+python-dotenv>=1.0.0  # loads .env file automatically
+tiktoken>=0.7.0
+
+# ── Web UI (optional) ────────────────────────────────────────────────────────
+streamlit>=1.35.0

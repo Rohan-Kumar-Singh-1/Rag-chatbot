@@ -1,0 +1,17 @@
+# Virtual environment
+rag_env/
+venv/
+
+# Vector store
+vector_store/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Environment variables
+.env
+
+# OS
+.DS_Store
+Thumbs.db
