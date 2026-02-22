@@ -96,18 +96,17 @@ def build_store(docs: list[Document], embeddings) -> FAISS:
 
 
 def get_llm(model_name: str, api_key: str):
-    """Create a ChatOpenAI client pointed at OpenRouter."""
+    os.environ["OPENAI_API_KEY"] = api_key
+    os.environ["OPENAI_API_BASE"] = "https://openrouter.ai/api/v1"
+
     return ChatOpenAI(
         model=model_name,
-        api_key=api_key,
-        base_url="https://openrouter.ai/api/v1",
         temperature=0.1,
         default_headers={
             "HTTP-Referer": "https://github.com/your-app",
             "X-Title": "RAG Chatbot",
         },
     )
-
 
 def build_chain(store: FAISS, llm):
     retriever = store.as_retriever(
