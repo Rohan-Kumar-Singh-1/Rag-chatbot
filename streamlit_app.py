@@ -1,278 +1,124 @@
 """
-Streamlit Web UI for the Context-Aware RAG Chatbot (OpenRouter edition)
+Temporary PDF RAG Chat
+No persistent DB
 Run: streamlit run streamlit_app.py
-
-Set OPENROUTER_API_KEY in a .env file or enter it in the sidebar.
+Requires OPENROUTER_API_KEY
 """
 
 import os
 import tempfile
-from pathlib import Path
-
 import streamlit as st
+
+from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import PyPDFLoader, TextLoader, WebBaseLoader
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain.chains.conversational_retrieval.base import ConversationalRetrievalChain
-from langchain.memory import ConversationBufferWindowMemory
-from langchain_core.documents import Document
-from langchain_core.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
+from langchain.chains import ConversationalRetrievalChain
+from langchain.memory import ConversationBufferMemory
+from dotenv import load_dotenv
+# ── Page Setup ──────────────────────────────
+st.set_page_config(page_title="PDF Chat", page_icon="📄", layout="centered")
+st.title("📄 Chat With Your PDF (Temporary Memory)")
+st.caption("No persistent storage · Session-only vector DB")
+load_dotenv()
+api_key = os.getenv("OPENROUTER_API_KEY")
+if not api_key:
+    st.error("OPENROUTER_API_KEY not set.")
+    st.stop()
 
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-# ── Page config ───────────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="RAG Chatbot",
-    page_icon="🤖",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+# ── Session State ───────────────────────────
+if "chain" not in st.session_state:
+    st.session_state.chain = None
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-# ── Constants ─────────────────────────────────────────────────────────────────
-EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-CHUNK_SIZE      = 1000
-CHUNK_OVERLAP   = 200
-TOP_K           = 4
+# ── Upload PDF ──────────────────────────────
+uploaded_file = st.file_uploader("Upload a PDF", type=["pdf"])
 
-RAG_PROMPT = PromptTemplate(
-    input_variables=["context", "question", "chat_history"],
-    template="""You are a helpful assistant. Answer using ONLY the provided context.
-If the answer isn't in the context, say "I don't have enough information in the provided documents."
+def build_chain(pdf_file):
+    # Save temporarily
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        tmp.write(pdf_file.read())
+        tmp_path = tmp.name
 
-CONTEXT:
-{context}
+    # Load PDF
+    loader = PyPDFLoader(tmp_path)
+    docs = loader.load()
 
-CHAT HISTORY:
-{chat_history}
+    # Split
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=200
+    )
+    chunks = splitter.split_documents(docs)
 
-QUESTION: {question}
-
-ANSWER:""",
-)
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-@st.cache_resource(show_spinner="Loading embedding model…")
-def get_embeddings():
-    return HuggingFaceEmbeddings(
-        model_name=EMBEDDING_MODEL,
+    # Embeddings (in memory only)
+    embeddings = HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-MiniLM-L6-v2",
         model_kwargs={"device": "cpu"},
         encode_kwargs={"normalize_embeddings": True},
     )
 
+    vectorstore = FAISS.from_documents(chunks, embeddings)
 
-def load_documents(source_type: str, source) -> list[Document]:
-    if source_type == "PDF Upload":
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f:
-            f.write(source.read())
-            tmp = f.name
-        return PyPDFLoader(tmp).load()
-
-    elif source_type == "Text Upload":
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".txt", mode="wb") as f:
-            f.write(source.read())
-            tmp = f.name
-        return TextLoader(tmp, encoding="utf-8").load()
-
-    elif source_type == "Website URL":
-        return WebBaseLoader(source).load()
-
-    elif source_type == "Raw Text":
-        return [Document(page_content=source, metadata={"source": "user_input"})]
-
-
-def build_store(docs: list[Document], embeddings) -> FAISS:
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP
-    )
-    chunks = splitter.split_documents(docs)
-    return FAISS.from_documents(chunks, embeddings)
-
-
-def get_llm(model_name: str, api_key: str):
+    # LLM
     os.environ["OPENAI_API_KEY"] = api_key
     os.environ["OPENAI_API_BASE"] = "https://openrouter.ai/api/v1"
 
-    return ChatOpenAI(
-        model=model_name,
+    llm = ChatOpenAI(
+        model="openai/gpt-4o-mini",
         temperature=0.1,
-        default_headers={
-            "HTTP-Referer": "https://github.com/your-app",
-            "X-Title": "RAG Chatbot",
-        },
     )
 
-def build_chain(store: FAISS, llm):
-    retriever = store.as_retriever(
-        search_type="mmr",
-        search_kwargs={"k": TOP_K, "fetch_k": 10},
-    )
-    memory = ConversationBufferWindowMemory(
+    memory = ConversationBufferMemory(
         memory_key="chat_history",
         return_messages=True,
-        output_key="answer",
-        k=5,
     )
-    return ConversationalRetrievalChain.from_llm(
+
+    chain = ConversationalRetrievalChain.from_llm(
         llm=llm,
-        retriever=retriever,
+        retriever=vectorstore.as_retriever(search_kwargs={"k": 4}),
         memory=memory,
-        combine_docs_chain_kwargs={"prompt": RAG_PROMPT},
-        return_source_documents=True,
-        verbose=False,
+        return_source_documents=False,
     )
 
+    return chain
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.title("⚙️ Configuration")
+# ── Build Chain ─────────────────────────────
+if uploaded_file and st.session_state.chain is None:
+    with st.spinner("Processing PDF..."):
+        st.session_state.chain = build_chain(uploaded_file)
+        st.success("PDF loaded into temporary memory!")
 
-    # -- Data source
-    st.subheader("📂 Data Source")
-    source_type = st.selectbox(
-        "Source type",
-        ["PDF Upload", "Text Upload", "Website URL", "Raw Text"],
-    )
-
-    source_input = None
-    if source_type in ("PDF Upload", "Text Upload"):
-        accept = "application/pdf" if source_type == "PDF Upload" else "text/plain"
-        source_input = st.file_uploader(
-            f"Upload {source_type.split()[0]}",
-            type=["pdf"] if "PDF" in source_type else ["txt", "md"],
-        )
-    elif source_type == "Website URL":
-        source_input = st.text_input("Enter URL", placeholder="https://example.com")
-    else:
-        source_input = st.text_area(
-            "Paste text",
-            height=150,
-            placeholder="Paste any text here…",
-        )
-
-    # -- OpenRouter settings
-    st.subheader("🔑 OpenRouter")
-
-    api_key = os.getenv("OPENROUTER_API_KEY")
-
-    if not api_key:
-        st.error("OPENROUTER_API_KEY environment variable not set.")
-    else:
-        st.success("✅ OpenRouter API key loaded.")
-
-    # Popular model options on OpenRouter
-    MODEL_OPTIONS = [
-        "openai/gpt-4o-mini",
-        "openai/gpt-4o",
-        "anthropic/claude-3-haiku",
-        "anthropic/claude-3.5-sonnet",
-        "meta-llama/llama-3.1-8b-instruct:free",
-        "mistralai/mistral-7b-instruct:free",
-        "google/gemma-2-9b-it:free",
-        "custom (type below)",
-    ]
-    model_choice = st.selectbox("Model", MODEL_OPTIONS)
-    if model_choice == "custom (type below)":
-        model_name = st.text_input("Model slug", placeholder="provider/model-name")
-    else:
-        model_name = model_choice
-        st.caption(f"🔗 [View on OpenRouter](https://openrouter.ai/models/{model_name})")
-
-    # -- Build button
-    build_btn = st.button("🚀 Build Knowledge Base", use_container_width=True)
-
-    if st.button("🗑️ Clear Chat", use_container_width=True):
-        st.session_state.messages = []
-        st.session_state.chain = None
-        st.rerun()
-
-
-# ── Main UI ───────────────────────────────────────────────────────────────────
-st.title("🤖 Context-Aware RAG Chatbot")
-st.caption("Powered by LangChain · FAISS · Sentence Transformers · OpenRouter")
-
-# Session state
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "chain" not in st.session_state:
+# ── Clear Button ────────────────────────────
+if st.button("🗑️ Clear Session"):
     st.session_state.chain = None
-if "doc_info" not in st.session_state:
-    st.session_state.doc_info = ""
+    st.session_state.messages = []
+    st.rerun()
 
-# ── Build knowledge base ──────────────────────────────────────────────────────
-if build_btn:
-    if not source_input:
-        st.sidebar.error("⚠️ Please provide a data source first.")
-    elif not api_key:
-        st.sidebar.error("⚠️ Please enter your OpenRouter API key.")
-    elif not model_name:
-        st.sidebar.error("⚠️ Please enter a model slug.")
-    else:
-        with st.spinner("📥 Loading & indexing documents…"):
-            try:
-                embeddings = get_embeddings()
-                docs = load_documents(source_type, source_input)
-                store = build_store(docs, embeddings)
-                llm = get_llm(model_name, api_key)
-                st.session_state.chain = build_chain(store, llm)
-                st.session_state.messages = []
+# ── Chat Interface ──────────────────────────
+if st.session_state.chain:
 
-                splitter = RecursiveCharacterTextSplitter(
-                    chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP
-                )
-                n_chunks = len(splitter.split_documents(docs))
-                st.session_state.doc_info = (
-                    f"✅ Indexed **{len(docs)} document(s)** → **{n_chunks} chunks** "
-                    f"| Model: `{model_name}` via OpenRouter | Embeddings: `all-MiniLM-L6-v2`"
-                )
-                st.sidebar.success("Knowledge base ready!")
-            except Exception as e:
-                st.sidebar.error(f"❌ Error: {e}")
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
 
-# Status bar
-if st.session_state.doc_info:
-    st.info(st.session_state.doc_info)
-elif not st.session_state.chain:
-    st.warning("👈 Upload a document and click **Build Knowledge Base** to start.")
+    if prompt := st.chat_input("Ask a question about the PDF..."):
+        st.session_state.messages.append({"role": "user", "content": prompt})
 
-# ── Chat interface ────────────────────────────────────────────────────────────
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
-        if msg.get("sources"):
-            with st.expander("📚 Sources"):
-                for s in msg["sources"]:
-                    st.markdown(f"- `{s}`")
+        with st.chat_message("user"):
+            st.markdown(prompt)
 
-if prompt := st.chat_input(
-    "Ask anything about your document…",
-    disabled=st.session_state.chain is None,
-):
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking..."):
+                result = st.session_state.chain.invoke({"question": prompt})
+                answer = result["answer"]
+            st.markdown(answer)
 
-    with st.chat_message("assistant"):
-        with st.spinner("Thinking…"):
-            result = st.session_state.chain.invoke({"question": prompt})
-            answer = result["answer"]
-            sources_raw = result.get("source_documents", [])
-            seen, sources = set(), []
-            for doc in sources_raw:
-                label = doc.metadata.get("source", "unknown")
-                page = doc.metadata.get("page", "")
-                label += f"  (p.{page + 1})" if page != "" else ""
-                if label not in seen:
-                    sources.append(label)
-                    seen.add(label)
+        st.session_state.messages.append(
+            {"role": "assistant", "content": answer}
+        )
 
-        st.markdown(answer)
-        if sources:
-            with st.expander("📚 Sources"):
-                for s in sources:
-                    st.markdown(f"- `{s}`")
-
-    st.session_state.messages.append(
-        {"role": "assistant", "content": answer, "sources": sources}
-    )
+else:
+    st.info("Upload a PDF to start chatting.")
