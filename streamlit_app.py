@@ -24,7 +24,8 @@ from langchain_core.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-
+import os
+st.write("API key exists:", bool(os.getenv("OPENROUTER_API_KEY")))
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="RAG Chatbot",
@@ -158,13 +159,11 @@ with st.sidebar:
 
     # -- OpenRouter settings
     st.subheader("🔑 OpenRouter")
-    api_key = st.text_input(
-        "API Key",
-        value=os.getenv("OPENROUTER_API_KEY", ""),
-        type="password",
-        placeholder="sk-or-...",
-        help="Get your free key at https://openrouter.ai",
-    )
+
+    # Load API key securely from Streamlit Secrets
+    api_key = st.secrets["OPENROUTER_API_KEY"]
+
+    st.success("✅ OpenRouter API key loaded securely.")
 
     # Popular model options on OpenRouter
     MODEL_OPTIONS = [
