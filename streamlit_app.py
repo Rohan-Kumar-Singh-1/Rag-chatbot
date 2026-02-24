@@ -1,6 +1,5 @@
 """
-Multi-Document RAG Chat (Temporary Memory)
-No persistent DB
+Multi-Source RAG Chat (Files + Website Scraping)
 Run: streamlit run streamlit_app.py
 Requires OPENROUTER_API_KEY
 """
@@ -8,11 +7,14 @@ Requires OPENROUTER_API_KEY
 import os
 import tempfile
 import streamlit as st
+import requests
+from bs4 import BeautifulSoup
+from dotenv import load_dotenv
 
+from langchain.schema import Document
 from langchain_community.document_loaders import (
     PyPDFLoader,
     TextLoader,
-    CSVLoader,
     Docx2txtLoader,
 )
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -21,12 +23,12 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_openai import ChatOpenAI
 from langchain.chains import ConversationalRetrievalChain
 from langchain.memory import ConversationBufferMemory
-from dotenv import load_dotenv
+
 
 # ── Page Setup ──────────────────────────────
-st.set_page_config(page_title="Document Chat", page_icon="📂", layout="centered")
-st.title("📂 Chat With Your Documents (Temporary Memory)")
-st.caption("Supports PDF, CSV, TXT, DOCX, MD · Session-only vector DB")
+st.set_page_config(page_title="RAG Chat", page_icon="🧠", layout="centered")
+st.title("🧠 Chat With Files or Websites")
+st.caption("Upload documents or enter a URL · Session-only vector DB")
 
 load_dotenv()
 api_key = os.getenv("OPENROUTER_API_KEY")
@@ -42,17 +44,42 @@ if "chain" not in st.session_state:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# ── File Upload (Multiple Supported) ───────
+
+# ── File Upload ─────────────────────────────
 uploaded_files = st.file_uploader(
-    "Upload your documents",
+    "Upload documents",
     type=["pdf", "txt", "csv", "docx", "md"],
     accept_multiple_files=True
 )
 
+# ── URL Input ───────────────────────────────
+url_input = st.text_input("Or enter a website URL to scrape:")
 
-# ── Build Chain Function ────────────────────
-def build_chain(files):
 
+# ── Website Scraper ─────────────────────────
+def scrape_website(url):
+    try:
+        response = requests.get(url, timeout=10)
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        # Remove scripts and styles
+        for tag in soup(["script", "style"]):
+            tag.decompose()
+
+        text = soup.get_text(separator="\n")
+        clean_text = "\n".join(
+            [line.strip() for line in text.splitlines() if line.strip()]
+        )
+
+        return [Document(page_content=clean_text)]
+
+    except Exception as e:
+        st.error(f"Error scraping website: {e}")
+        return []
+
+
+# ── Load Documents From Files ───────────────
+def load_file_documents(files):
     all_docs = []
 
     for uploaded_file in files:
@@ -74,10 +101,9 @@ def build_chain(files):
             docs = loader.load()
             all_docs.extend(docs)
 
-        # CSV (Pandas Safe Version)
+        # CSV (Safe Pandas Version)
         elif file_extension == "csv":
             import pandas as pd
-            from langchain.schema import Document
 
             try:
                 df = pd.read_csv(tmp_path, encoding="utf-8")
@@ -97,17 +123,18 @@ def build_chain(files):
         else:
             continue
 
-    if not all_docs:
-        return None
+    return all_docs
 
-    # Split documents
+
+# ── Build RAG Chain ─────────────────────────
+def build_chain_from_docs(all_docs):
+
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000,
         chunk_overlap=200
     )
     chunks = splitter.split_documents(all_docs)
 
-    # Embeddings
     embeddings = HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2",
         model_kwargs={"device": "cpu"},
@@ -116,7 +143,6 @@ def build_chain(files):
 
     vectorstore = FAISS.from_documents(chunks, embeddings)
 
-    # LLM setup (OpenRouter)
     os.environ["OPENAI_API_KEY"] = api_key
     os.environ["OPENAI_API_BASE"] = "https://openrouter.ai/api/v1"
 
@@ -130,24 +156,37 @@ def build_chain(files):
         return_messages=True,
     )
 
-    chain = ConversationalRetrievalChain.from_llm(
+    return ConversationalRetrievalChain.from_llm(
         llm=llm,
         retriever=vectorstore.as_retriever(search_kwargs={"k": 4}),
         memory=memory,
         return_source_documents=False,
     )
 
-    return chain
+
+# ── Build Chain When Content Provided ───────
+if (uploaded_files or url_input) and st.session_state.chain is None:
+    with st.spinner("Processing content..."):
+
+        docs_from_files = []
+        docs_from_url = []
+
+        if uploaded_files:
+            docs_from_files = load_file_documents(uploaded_files)
+
+        if url_input:
+            docs_from_url = scrape_website(url_input)
+
+        all_docs = docs_from_files + docs_from_url
+
+        if all_docs:
+            st.session_state.chain = build_chain_from_docs(all_docs)
+            st.success("Content loaded into temporary memory!")
+        else:
+            st.error("No content could be processed.")
 
 
-# ── Build Chain on Upload ───────────────────
-if uploaded_files and st.session_state.chain is None:
-    with st.spinner("Processing documents..."):
-        st.session_state.chain = build_chain(uploaded_files)
-        st.success("Documents loaded into temporary memory!")
-
-
-# ── Clear Button ────────────────────────────
+# ── Clear Session ───────────────────────────
 if st.button("🗑️ Clear Session"):
     st.session_state.chain = None
     st.session_state.messages = []
@@ -161,7 +200,8 @@ if st.session_state.chain:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    if prompt := st.chat_input("Ask a question about your documents..."):
+    if prompt := st.chat_input("Ask a question about your content..."):
+
         st.session_state.messages.append({"role": "user", "content": prompt})
 
         with st.chat_message("user"):
@@ -179,4 +219,4 @@ if st.session_state.chain:
         )
 
 else:
-    st.info("Upload one or more documents to start chatting.")
+    st.info("Upload files or enter a URL to start chatting.")
