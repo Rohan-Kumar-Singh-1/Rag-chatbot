@@ -8,6 +8,8 @@ import os
 import tempfile
 import streamlit as st
 import requests
+from langchain.retrievers import EnsembleRetriever
+from langchain_community.retrievers import BM25Retriever
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
@@ -133,6 +135,7 @@ def build_chain_from_docs(all_docs):
         chunk_size=1000,
         chunk_overlap=200
     )
+
     chunks = splitter.split_documents(all_docs)
 
     embeddings = HuggingFaceEmbeddings(
@@ -141,7 +144,19 @@ def build_chain_from_docs(all_docs):
         encode_kwargs={"normalize_embeddings": True},
     )
 
+    # FAISS (Semantic)
     vectorstore = FAISS.from_documents(chunks, embeddings)
+    faiss_retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
+
+    # BM25 (Keyword)
+    bm25_retriever = BM25Retriever.from_documents(chunks)
+    bm25_retriever.k = 4
+
+    # Hybrid
+    retriever = EnsembleRetriever(
+        retrievers=[bm25_retriever, faiss_retriever],
+        weights=[0.5, 0.5]
+    )
 
     os.environ["OPENAI_API_KEY"] = api_key
     os.environ["OPENAI_API_BASE"] = "https://openrouter.ai/api/v1"
@@ -158,11 +173,10 @@ def build_chain_from_docs(all_docs):
 
     return ConversationalRetrievalChain.from_llm(
         llm=llm,
-        retriever=vectorstore.as_retriever(search_kwargs={"k": 4}),
+        retriever=retriever,
         memory=memory,
         return_source_documents=False,
     )
-
 
 # ── Build Chain When Content Provided ───────
 if (uploaded_files or url_input) and st.session_state.chain is None:
