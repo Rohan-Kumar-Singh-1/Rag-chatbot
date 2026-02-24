@@ -202,17 +202,23 @@ if st.session_state.chain:
 
     if prompt := st.chat_input("Ask a question about your content..."):
 
-        st.session_state.messages.append({"role": "user", "content": prompt})
+        st.session_state.messages.append(
+            {"role": "user", "content": prompt}
+        )
 
         with st.chat_message("user"):
             st.markdown(prompt)
 
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
-                result = st.session_state.chain.invoke({"question": prompt})
+
+                result = st.session_state.chain.invoke(
+                    {"question": prompt}
+                )
+
                 answer = result["answer"]
 
-            st.markdown(answer)
+                st.markdown(answer)
 
         st.session_state.messages.append(
             {"role": "assistant", "content": answer}
